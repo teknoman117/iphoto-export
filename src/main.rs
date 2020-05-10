@@ -8,7 +8,7 @@ use plist::Value;
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 struct Album {
     album_name: String,
@@ -20,7 +20,7 @@ struct Master {
     timestamp: FileTime,
 }
 
-fn album_from_value<'a>(value: &'a plist::Value) -> Album {
+fn album_from_value(value: &plist::Value) -> Album {
     let dict = value.as_dictionary().unwrap();
     Album {
         album_name: dict
@@ -40,6 +40,46 @@ fn album_from_value<'a>(value: &'a plist::Value) -> Album {
             .map(|key| key.as_string().unwrap().to_string().parse::<u32>().unwrap())
             .collect(),
     }
+}
+
+fn albums_from_value(value: &plist::Value) -> Vec<Album> {
+    let data = value.as_array().unwrap();
+    data.into_iter()
+        .map(|album| album_from_value(album))
+        .collect()
+}
+
+fn masters_from_value(
+    value: &plist::Value,
+    archive_path: &str,
+    base_path: &Path,
+) -> HashMap<u32, Master> {
+    let mut masters = HashMap::new();
+    let data = value.as_dictionary().unwrap();
+    for (key, value) in data.into_iter() {
+        let index = key.to_string().parse::<u32>().unwrap();
+        let path = value
+            .as_dictionary()
+            .and_then(|dict| dict.get("ImagePath"))
+            .and_then(|path| path.as_string())
+            .map(|path| path.replace(archive_path, "."))
+            .map(|rpath| base_path.join(rpath))
+            .unwrap();
+        let timestamp = value
+            .as_dictionary()
+            .and_then(|dict| dict.get("DateAsTimerIntervalGMT"))
+            .and_then(|interval| interval.as_real())
+            .unwrap();
+        masters.insert(
+            index,
+            Master {
+                path: path,
+                // Apple CoreData's epoch is not the Unix epoch
+                timestamp: FileTime::from_unix_time((timestamp + 978307200.0) as i64, 0),
+            },
+        );
+    }
+    masters
 }
 
 // I would use serde_derive to deserialize the archive, but Apple doesn't stick to the same
@@ -97,52 +137,21 @@ fn main() -> Result<(), std::io::Error> {
         .and_then(|path| path.as_string())
         .unwrap();
 
-    // Parse the master images structure
-    let masters = {
-        let mut masters = HashMap::new();
-        let data = album_data
-            .as_dictionary()
-            .and_then(|dict| dict.get("Master Image List"))
-            .and_then(|masters| masters.as_dictionary())
-            .unwrap();
-        for (key, value) in data.into_iter() {
-            let index = key.to_string().parse::<u32>().unwrap();
-            let path = value
-                .as_dictionary()
-                .and_then(|dict| dict.get("ImagePath"))
-                .and_then(|path| path.as_string())
-                .map(|path| path.replace(archive_path, "."))
-                .map(|rpath| library_path.join(rpath))
-                .unwrap();
-            let timestamp = value
-                .as_dictionary()
-                .and_then(|dict| dict.get("DateAsTimerIntervalGMT"))
-                .and_then(|interval| interval.as_real())
-                .unwrap();
-            // Apple CoreData's epoch is not the Unix epoch
-            let adjusted_time = FileTime::from_unix_time((timestamp + 978307200.0) as i64, 0);
-            masters.insert(
-                index,
-                Master {
-                    path: path,
-                    timestamp: adjusted_time,
-                },
-            );
-        }
-        masters
-    };
+    // Parse masters entry
+    let masters: HashMap<u32, Master> = album_data
+        .as_dictionary()
+        .and_then(|dict| dict.get("Master Image List"))
+        .map(|masters| masters_from_value(masters, &archive_path, library_path.as_path()))
+        .unwrap();
 
-    // dump albums
+    // Parse albums entry
     let albums: Vec<Album> = album_data
         .as_dictionary()
         .and_then(|dict| dict.get("List of Albums"))
-        .and_then(|albums| albums.as_array())
-        .unwrap()
-        .into_iter()
-        .map(|album| album_from_value(album))
-        .collect();
-    // let's copy some pictures
+        .map(|album| albums_from_value(album))
+        .unwrap();
 
+    // let's copy some pictures
     for album in albums {
         // create album directory
         output_path.push(&album.album_name);
