@@ -1,6 +1,6 @@
 [package]
 name = "iphoto-extract"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["Nathaniel R. Lewis <linux.robotdude@gmail.com>"]
 edition = "2018"
 
@@ -10,3 +10,5 @@ edition = "2018"
 clap = "2"
 filetime = "^0.2.10"
 plist = "1"
+serde = "1"
+serde_derive = "1"
